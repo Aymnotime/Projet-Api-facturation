@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
+from typing import Annotated
+import math
 
-from fastapi import Depends, FastAPI, HTTPException, status
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, joinedload
 
 from .db import Base, engine, get_db
 from .models import ApiKey, Customer, Invoice, Organization
@@ -13,13 +15,17 @@ from .schemas import (
     CustomerRead,
     InvoiceCreate,
     InvoiceRead,
+    InvoiceUpdate,
     OrganizationCreate,
     OrganizationRead,
+    PaginatedCustomers,
+    PaginatedInvoices,
 )
 from .security import generate_api_key, require_organization
+from .tasks.invoice_tasks import generate_invoice_pdf, validate_invoice_en16931
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="Projet API Facturation", version="0.1.0", description="API-first billing infrastructure")
+app = FastAPI(title="Projet API Facturation", version="0.2.0", description="API-first billing infrastructure")
 
 
 @app.get("/health")
@@ -62,11 +68,22 @@ def create_customer(
     return customer
 
 
-@app.get("/v1/customers", response_model=list[CustomerRead])
+@app.get("/v1/customers", response_model=PaginatedCustomers)
 def list_customers(
-    organization: Organization = Depends(require_organization), db: Session = Depends(get_db)
-) -> list[Customer]:
-    return list(db.scalars(select(Customer).where(Customer.organization_id == organization.id).order_by(Customer.created_at.desc())))
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=20, ge=1, le=100),
+    organization: Organization = Depends(require_organization), 
+    db: Session = Depends(get_db)
+) -> PaginatedCustomers:
+    offset = (page - 1) * per_page
+    count_query = select(func.count()).select_from(Customer).where(Customer.organization_id == organization.id)
+    total = db.scalar(count_query) or 0
+    pages = math.ceil(total / per_page) if total > 0 else 1
+    
+    query = select(Customer).where(Customer.organization_id == organization.id).order_by(Customer.created_at.desc()).offset(offset).limit(per_page)
+    items = list(db.scalars(query))
+    
+    return PaginatedCustomers(items=items, total=total, page=page, per_page=per_page, pages=pages)
 
 
 @app.post("/v1/invoices", response_model=InvoiceRead, status_code=201)
@@ -83,14 +100,45 @@ def create_invoice(
     db.add(invoice)
     db.commit()
     db.refresh(invoice)
+    
+    # Trigger async validation and PDF generation (only if Redis is available)
+    import os
+    if os.getenv("REDIS_URL"):
+        try:
+            validate_invoice_en16931.delay(invoice.id)
+            generate_invoice_pdf.delay(invoice.id)
+        except Exception:
+            # Silently fail in test environments without Redis
+            pass
+    
     return invoice
 
 
-@app.get("/v1/invoices", response_model=list[InvoiceRead])
+@app.get("/v1/invoices", response_model=PaginatedInvoices)
 def list_invoices(
-    organization: Organization = Depends(require_organization), db: Session = Depends(get_db)
-) -> list[Invoice]:
-    return list(db.scalars(select(Invoice).where(Invoice.organization_id == organization.id).order_by(Invoice.created_at.desc())))
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=20, ge=1, le=100),
+    status_filter: str | None = Query(default=None, alias="status"),
+    organization: Organization = Depends(require_organization), 
+    db: Session = Depends(get_db)
+) -> PaginatedInvoices:
+    offset = (page - 1) * per_page
+    
+    stmt = select(Invoice).where(Invoice.organization_id == organization.id)
+    if status_filter:
+        stmt = stmt.where(Invoice.status == status_filter)
+    
+    count_query = select(func.count()).select_from(Invoice).where(Invoice.organization_id == organization.id)
+    if status_filter:
+        count_query = count_query.where(Invoice.status == status_filter)
+    
+    total = db.scalar(count_query) or 0
+    pages = math.ceil(total / per_page) if total > 0 else 1
+    
+    stmt = stmt.order_by(Invoice.created_at.desc()).offset(offset).limit(per_page)
+    items = list(db.scalars(stmt))
+    
+    return PaginatedInvoices(items=items, total=total, page=page, per_page=per_page, pages=pages)
 
 
 @app.post("/v1/invoices/{invoice_id}/issue", response_model=InvoiceRead)
@@ -107,3 +155,41 @@ def issue_invoice(
     db.commit()
     db.refresh(invoice)
     return invoice
+
+
+@app.patch("/v1/invoices/{invoice_id}", response_model=InvoiceRead)
+def update_invoice(
+    invoice_id: str,
+    payload: InvoiceUpdate,
+    organization: Organization = Depends(require_organization),
+    db: Session = Depends(get_db)
+) -> Invoice:
+    invoice = db.scalar(select(Invoice).where(Invoice.id == invoice_id, Invoice.organization_id == organization.id))
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status != "draft":
+        raise HTTPException(status_code=409, detail="Only draft invoices can be updated")
+    
+    update_data = payload.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(invoice, field, value)
+    
+    db.commit()
+    db.refresh(invoice)
+    return invoice
+
+
+@app.delete("/v1/invoices/{invoice_id}", status_code=204)
+def delete_invoice(
+    invoice_id: str,
+    organization: Organization = Depends(require_organization),
+    db: Session = Depends(get_db)
+) -> None:
+    invoice = db.scalar(select(Invoice).where(Invoice.id == invoice_id, Invoice.organization_id == organization.id))
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status != "draft":
+        raise HTTPException(status_code=409, detail="Only draft invoices can be deleted")
+    
+    db.delete(invoice)
+    db.commit()

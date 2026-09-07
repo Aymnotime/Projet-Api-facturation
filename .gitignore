@@ -1,9 +1,65 @@
-.venv/
+```
+# Python
 __pycache__/
-.pytest_cache/
 *.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Database
 *.db
+*.db-journal
+
+# Logs
+*.log
+logs/
+
+# Coverage
+.coverage
+htmlcov/
+.coverage.*
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pytest
+.pytest_cache/
+
+# Alembic
+alembic/versions/*.py
+
+# Environment variables
 .env
-node_modules/
-.next/
-.DS_Store
+.env.local
+*.env
+*.env.*
+.env.*
+```

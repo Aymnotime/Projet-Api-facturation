@@ -1,65 +1,31 @@
-```
+```gitignore
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+*.pyc
+*.pyo
+*.pyd
+*.py~
 
-# Virtual environments
+# Dependencies
 venv/
-env/
-ENV/
 .venv/
-.env/
-
-# Celery
-celerybeat-schedule
-celerybeat.pid
-
-# Database
-*.db
-*.db-journal
+.env
+.env.local
+*.env.*
 
 # Logs
 *.log
-logs/
 
-# Coverage
+# Database
+*.db
+
+# IDE
+.vscode/
+.idea/
+
+# Tests
+.pytest_cache/
 .coverage
 htmlcov/
-.coverage.*
-
-# MyPy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pytest
-.pytest_cache/
-
-# Alembic
-alembic/versions/*.py
-
-# Environment variables
-.env
-.env.local
-*.env
-*.env.*
-.env.*
+coverage/
 ```

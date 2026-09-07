@@ -1,13 +1,15 @@
 from datetime import datetime, timezone
-from typing import Annotated
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Annotated, List, Optional
 import math
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from .db import Base, engine, get_db
-from .models import ApiKey, Customer, Invoice, Organization
+from .models import ApiKey, Customer, Invoice, Organization, InvoiceLine, InvoiceStatus as ModelInvoiceStatus
 from .schemas import (
     ApiKeyCreate,
     ApiKeyRead,
@@ -23,9 +25,57 @@ from .schemas import (
 )
 from .security import generate_api_key, require_organization
 from .tasks.invoice_tasks import generate_invoice_pdf, validate_invoice_en16931
+from .core.logic import (
+    calculate_invoice_totals,
+    validate_state_transition,
+    validate_invoice_data,
+    CalculationError,
+    InvoiceStatus,
+    get_next_valid_statuses,
+)
+
+class InvoiceLineCreate(BaseModel):
+    description: str = Field(min_length=1, max_length=500)
+    quantity: Decimal = Field(default=Decimal('1.00'), gt=0)
+    unit_price_minor: int = Field(gt=0, description="Unit price excluding tax in cents")
+    tax_rate: Decimal = Field(default=Decimal('20.00'), ge=0, le=100, description="Tax rate percentage")
+    product_code: Optional[str] = Field(default=None, max_length=64)
+
+class InvoiceCreateWithLines(BaseModel):
+    customer_id: str
+    number: str = Field(min_length=1, max_length=64)
+    currency: str = Field(default="EUR", min_length=3, max_length=3)
+    notes: Optional[str] = None
+    payment_terms: Optional[str] = None
+    purchase_order_number: Optional[str] = None
+    lines: List[InvoiceLineCreate] = Field(..., min_length=1)
+
+class InvoiceLineRead(BaseModel):
+    id: str
+    description: str
+    quantity: Decimal
+    unit_price_minor: int
+    tax_rate: Decimal
+    line_total_minor: int
+    tax_amount_minor: int
+    line_gross_minor: int
+    product_code: Optional[str] = None
+    
+    model_config = {"from_attributes": True}
+
+class InvoiceReadWithLines(InvoiceRead):
+    lines: List[InvoiceLineRead] = []
+    subtotal_minor: int = 0
+    tax_total_minor: int = 0
+    total_minor: int = 0
+    amount_due_minor: int = 0
+    issue_date: Optional[datetime] = None
+    due_date: Optional[datetime] = None
+    payment_terms: Optional[str] = None
+    purchase_order_number: Optional[str] = None
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="Projet API Facturation", version="0.2.0", description="API-first billing infrastructure")
+app = FastAPI(title="Projet API Facturation", version="0.3.0", description="API-first billing infrastructure with full business logic")
 
 
 @app.get("/health")
@@ -86,29 +136,87 @@ def list_customers(
     return PaginatedCustomers(items=items, total=total, page=page, per_page=per_page, pages=pages)
 
 
-@app.post("/v1/invoices", response_model=InvoiceRead, status_code=201)
-def create_invoice(
-    payload: InvoiceCreate, organization: Organization = Depends(require_organization), db: Session = Depends(get_db)
+@app.post("/v1/invoices", response_model=InvoiceReadWithLines, status_code=201)
+def create_invoice_with_lines(
+    payload: InvoiceCreateWithLines, 
+    organization: Organization = Depends(require_organization), 
+    db: Session = Depends(get_db)
 ) -> Invoice:
+    # Verify customer exists and belongs to organization
     customer = db.scalar(select(Customer).where(Customer.id == payload.customer_id, Customer.organization_id == organization.id))
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
+    
+    # Check invoice number uniqueness
     existing = db.scalar(select(Invoice).where(Invoice.organization_id == organization.id, Invoice.number == payload.number))
     if existing:
         raise HTTPException(status_code=409, detail="Invoice number already exists")
-    invoice = Invoice(organization_id=organization.id, status="draft", **payload.model_dump())
+    
+    # Prepare line data for calculation
+    lines_data = []
+    for line in payload.lines:
+        lines_data.append({
+            'quantity': float(line.quantity),
+            'unit_price': Decimal(str(line.unit_price_minor)) / Decimal('100'),
+            'tax_rate': float(line.tax_rate)
+        })
+    
+    # Validate and calculate totals
+    try:
+        validate_invoice_data({'lines': lines_data})
+        totals = calculate_invoice_totals(lines_data)
+    except CalculationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    # Create invoice
+    invoice = Invoice(
+        organization_id=organization.id,
+        customer_id=payload.customer_id,
+        number=payload.number,
+        currency=payload.currency,
+        status=InvoiceStatus.DRAFT.value,
+        notes=payload.notes,
+        payment_terms=payload.payment_terms,
+        purchase_order_number=payload.purchase_order_number,
+        subtotal_minor=int(totals['subtotal'] * 100),
+        tax_total_minor=int(totals['total_tax'] * 100),
+        total_minor=int(totals['total_including_tax'] * 100),
+        amount_due_minor=int(totals['total_including_tax'] * 100),
+    )
     db.add(invoice)
+    db.flush()  # Get invoice ID before creating lines
+    
+    # Create invoice lines
+    for position, line in enumerate(payload.lines):
+        line_total = int((line.quantity * Decimal(str(line.unit_price_minor))).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+        tax_amount = int((Decimal(str(line_total)) * line.tax_rate / Decimal('100')).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+        line_gross = line_total + tax_amount
+        
+        invoice_line = InvoiceLine(
+            organization_id=organization.id,
+            invoice_id=invoice.id,
+            description=line.description,
+            quantity=line.quantity,
+            unit_price_minor=line.unit_price_minor,
+            tax_rate=line.tax_rate,
+            line_total_minor=line_total,
+            tax_amount_minor=tax_amount,
+            line_gross_minor=line_gross,
+            product_code=line.product_code,
+            position=position,
+        )
+        db.add(invoice_line)
+    
     db.commit()
     db.refresh(invoice)
     
-    # Trigger async validation and PDF generation (only if Redis is available)
+    # Trigger async validation and PDF generation
     import os
     if os.getenv("REDIS_URL"):
         try:
             validate_invoice_en16931.delay(invoice.id)
             generate_invoice_pdf.delay(invoice.id)
         except Exception:
-            # Silently fail in test environments without Redis
             pass
     
     return invoice
@@ -141,17 +249,104 @@ def list_invoices(
     return PaginatedInvoices(items=items, total=total, page=page, per_page=per_page, pages=pages)
 
 
-@app.post("/v1/invoices/{invoice_id}/issue", response_model=InvoiceRead)
-def issue_invoice(
-    invoice_id: str, organization: Organization = Depends(require_organization), db: Session = Depends(get_db)
+@app.get("/v1/invoices/{invoice_id}", response_model=InvoiceReadWithLines)
+def get_invoice(
+    invoice_id: str, 
+    organization: Organization = Depends(require_organization), 
+    db: Session = Depends(get_db)
 ) -> Invoice:
     invoice = db.scalar(select(Invoice).where(Invoice.id == invoice_id, Invoice.organization_id == organization.id))
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    if invoice.status != "draft":
-        raise HTTPException(status_code=409, detail="Only draft invoices can be issued")
-    invoice.status = "issued"
+    return invoice
+
+
+@app.post("/v1/invoices/{invoice_id}/issue", response_model=InvoiceReadWithLines)
+def issue_invoice(
+    invoice_id: str, 
+    organization: Organization = Depends(require_organization), 
+    db: Session = Depends(get_db)
+) -> Invoice:
+    invoice = db.scalar(select(Invoice).where(Invoice.id == invoice_id, Invoice.organization_id == organization.id))
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    
+    # Validate state transition
+    current_status = InvoiceStatus(invoice.status)
+    if not validate_state_transition(current_status, InvoiceStatus.ISSUED):
+        valid_statuses = [s.value for s in get_next_valid_statuses(current_status)]
+        raise HTTPException(
+            status_code=409, 
+            detail=f"Cannot transition from {invoice.status} to issued. Valid transitions: {valid_statuses}"
+        )
+    
+    # Check invoice has lines
+    if not invoice.lines:
+        raise HTTPException(status_code=400, detail="Cannot issue an invoice without line items")
+    
+    invoice.status = InvoiceStatus.ISSUED.value
+    invoice.issue_date = datetime.now(timezone.utc)
     invoice.issued_at = datetime.now(timezone.utc)
+    
+    # Trigger PDF generation and validation on issue
+    import os
+    if os.getenv("REDIS_URL"):
+        try:
+            validate_invoice_en16931.delay(invoice.id)
+            generate_invoice_pdf.delay(invoice.id)
+        except Exception:
+            pass
+    
+    db.commit()
+    db.refresh(invoice)
+    return invoice
+
+
+@app.post("/v1/invoices/{invoice_id}/cancel", response_model=InvoiceReadWithLines)
+def cancel_invoice(
+    invoice_id: str, 
+    organization: Organization = Depends(require_organization), 
+    db: Session = Depends(get_db)
+) -> Invoice:
+    invoice = db.scalar(select(Invoice).where(Invoice.id == invoice_id, Invoice.organization_id == organization.id))
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    
+    current_status = InvoiceStatus(invoice.status)
+    if not validate_state_transition(current_status, InvoiceStatus.CANCELLED):
+        valid_statuses = [s.value for s in get_next_valid_statuses(current_status)]
+        raise HTTPException(
+            status_code=409, 
+            detail=f"Cannot cancel invoice with status {invoice.status}. Valid transitions: {valid_statuses}"
+        )
+    
+    invoice.status = InvoiceStatus.CANCELLED.value
+    invoice.amount_due_minor = 0
+    db.commit()
+    db.refresh(invoice)
+    return invoice
+
+
+@app.post("/v1/invoices/{invoice_id}/mark-paid", response_model=InvoiceReadWithLines)
+def mark_invoice_paid(
+    invoice_id: str, 
+    organization: Organization = Depends(require_organization), 
+    db: Session = Depends(get_db)
+) -> Invoice:
+    invoice = db.scalar(select(Invoice).where(Invoice.id == invoice_id, Invoice.organization_id == organization.id))
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    
+    current_status = InvoiceStatus(invoice.status)
+    if not validate_state_transition(current_status, InvoiceStatus.PAID):
+        valid_statuses = [s.value for s in get_next_valid_statuses(current_status)]
+        raise HTTPException(
+            status_code=409, 
+            detail=f"Cannot mark as paid. Current status: {invoice.status}. Valid transitions: {valid_statuses}"
+        )
+    
+    invoice.status = InvoiceStatus.PAID.value
+    invoice.amount_due_minor = 0
     db.commit()
     db.refresh(invoice)
     return invoice

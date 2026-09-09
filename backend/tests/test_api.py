@@ -27,7 +27,20 @@ def test_create_organization_and_api_key() -> None:
     invoice = client.post(
         "/v1/invoices",
         headers=headers,
-        json={"customer_id": customer.json()["id"], "number": "INV-001", "total_minor": 12000},
+        json={
+            "customer_id": customer.json()["id"],
+            "number": "INV-001",
+            "currency": "EUR",
+            "notes": "Test invoice",
+            "lines": [
+                {
+                    "description": "Service development",
+                    "quantity": 1.0,
+                    "unit_price_minor": 10000,
+                    "tax_rate": 20.0
+                }
+            ]
+        },
     )
     assert invoice.status_code == 201
     assert invoice.json()["status"] == "draft"

@@ -1,9 +1,59 @@
-.venv/
-__pycache__/
-.pytest_cache/
-*.py[cod]
-*.db
-.env
-node_modules/
+```
+# Next.js
 .next/
+out/
+
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+.env.local
+.env.*
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+
+# OS generated files
 .DS_Store
+Thumbs.db
+
+# Build outputs
+dist/
+build/
+target/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git/modules/
+git/
+*.sublime-workspace
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+```

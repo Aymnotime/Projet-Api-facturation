@@ -5,3 +5,7 @@ psycopg[binary]==3.2.3
 pydantic[email]==2.10.4
 pytest==8.3.4
 httpx==0.28.1
+celery==5.4.0
+redis==5.2.1
+reportlab==4.2.5
+alembic==1.14.0

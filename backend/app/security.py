@@ -84,6 +84,27 @@ def verify_mfa_code(secret: str, code: str) -> bool:
     return totp.verify(code, valid_window=1)
 
 
+def require_organization_with_idempotency(
+    authorization: str | None = Header(default=None), 
+    db: Session = Depends(get_db)
+) -> Organization:
+    """Require a valid API key and return the organization, setting up for idempotency."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer API key required")
+    raw_key = authorization.removeprefix("Bearer ").strip()
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    api_key = db.scalar(select(ApiKey).where(ApiKey.key_hash == key_hash, ApiKey.revoked_at.is_(None)))
+    if not api_key:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked API key")
+    # Update last used timestamp
+    api_key.last_used_at = datetime.now(timezone.utc)
+    db.commit()
+    
+    # Store organization_id in state for idempotency handler
+    # This is done via request.state in middleware
+    return api_key.organization
+
+
 def require_organization(
     authorization: str | None = Header(default=None), db: Session = Depends(get_db)
 ) -> Organization:

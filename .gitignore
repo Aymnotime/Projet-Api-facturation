@@ -1,30 +1,42 @@
 ```
-# Database files
-*.db
-
-# Test cache and temporary files
-.pytest_cache/
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# Logs
-*.log
-
-# Environment files
-.env
-.env.local
-*.env.*
-
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Dependencies
+.Python
+env/
 venv/
 .venv/
-node_modules/
+.ENV
+.python-version
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+*.pot
+*.pyc
+*.pyo
+*.pyd
+*.so
+.TemporaryItems
+.deps
+.pytest_cache/
+.mypy_cache/
+.hypothesis/
+
+# Database
+*.db
+*.db-journal
+
+# Environment
+.env
+.env.local
+.env.*
 ```

@@ -33,6 +33,8 @@ from .core.logic import (
     InvoiceStatus,
     get_next_valid_statuses,
 )
+from .api.auth import router as auth_router
+from .api.users import router as users_router
 
 class InvoiceLineCreate(BaseModel):
     description: str = Field(min_length=1, max_length=500)
@@ -75,7 +77,15 @@ class InvoiceReadWithLines(InvoiceRead):
     purchase_order_number: Optional[str] = None
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="Projet API Facturation", version="0.3.0", description="API-first billing infrastructure with full business logic")
+app = FastAPI(
+    title="Projet API Facturation", 
+    version="0.4.0", 
+    description="API-first billing infrastructure with Identity, Users, RBAC and full business logic"
+)
+
+# Include routers
+app.include_router(auth_router)
+app.include_router(users_router)
 
 
 @app.get("/health")

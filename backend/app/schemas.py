@@ -179,3 +179,44 @@ class PaginatedUsers(BaseModel):
     page: int
     per_page: int
     pages: int
+
+
+# Invoice Numbering Schemas
+class InvoiceNumberGenerate(BaseModel):
+    """Schéma pour demander la génération d'un numéro de facture."""
+    organization_id: str | None = None  # Optionnel, pris du contexte si non fourni
+    year: int | None = Field(default=None, ge=2000, le=2100)
+    prefix: str | None = Field(default=None, min_length=1, max_length=10)
+
+
+class InvoiceNumberResponse(BaseModel):
+    """Réponse contenant le numéro généré."""
+    model_config = ConfigDict(from_attributes=True)
+    number: str
+    year: int
+    prefix: str
+    sequence: int
+    generated_at: datetime = Field(default_factory=lambda: datetime.now())
+
+
+class InvoiceNumberValidationRequest(BaseModel):
+    """Schéma pour valider un numéro de facture."""
+    number: str = Field(min_length=1, max_length=64)
+
+
+class InvoiceNumberValidationResponse(BaseModel):
+    """Résultat de la validation d'un numéro."""
+    is_valid: bool
+    error_message: str | None = None
+
+
+class InvoiceContinuityCheckResponse(BaseModel):
+    """Résultat de la vérification de continuité de numérotation."""
+    has_gaps: bool
+    expected_count: int
+    actual_count: int
+    gaps: list[str]
+    min_number: str | None
+    max_number: str | None
+    year: int
+    prefix: str

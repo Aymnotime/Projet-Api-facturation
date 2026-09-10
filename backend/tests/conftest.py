@@ -6,6 +6,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
+from app.models import Organization, User, UserRole
 
 
 # Create in-memory SQLite database for testing
@@ -39,6 +40,36 @@ def db_session():
 
 
 @pytest.fixture(scope="function")
+def test_organization(db_session):
+    """Create a test organization for each test."""
+    org = Organization(name="Test Organization")
+    db_session.add(org)
+    db_session.commit()
+    db_session.refresh(org)
+    return org
+
+
+@pytest.fixture(scope="function")
+def test_user(db_session, test_organization):
+    """Create a test user for each test."""
+    from app.security import get_password_hash
+    
+    user = User(
+        email="test@example.com",
+        password_hash=get_password_hash("testpassword123"),
+        full_name="Test User",
+        role=UserRole.ADMIN,
+        organization_id=test_organization.id,
+        is_active=True,
+        email_verified=True
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+
+
+@pytest.fixture(scope="function")
 def client(db_session):
     """Create a test client with database dependency override."""
     from fastapi.testclient import TestClient
@@ -56,3 +87,33 @@ def client(db_session):
     
     # Clean up overrides
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(scope="function")
+def auth_headers(test_organization, db_session):
+    """Create authentication headers for API requests."""
+    from app.security import generate_api_key
+    
+    # Create an API key for the test organization
+    raw_key, prefix, key_hash = generate_api_key()
+    
+    api_key = Organization(id=test_organization.id)
+    db_session.add(api_key)
+    
+    from app.models import ApiKey
+    api_key_obj = ApiKey(
+        organization_id=test_organization.id,
+        name="Test API Key",
+        prefix=prefix,
+        key_hash=key_hash
+    )
+    db_session.add(api_key_obj)
+    db_session.commit()
+    
+    def get_headers(org=None):
+        return {
+            "Authorization": f"Bearer {raw_key}",
+            "Content-Type": "application/json"
+        }
+    
+    return get_headers

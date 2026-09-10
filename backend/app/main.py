@@ -36,6 +36,7 @@ from .core.logic import (
 from .api.auth import router as auth_router
 from .api.users import router as users_router
 from .api.idempotency import IdempotencyHandler
+from .api.invoice_numbering import router as invoice_numbering_router
 from fastapi import Request
 from sqlalchemy.orm import Session
 from .db import get_db
@@ -92,6 +93,7 @@ app = FastAPI(
 # Include routers
 app.include_router(auth_router)
 app.include_router(users_router)
+app.include_router(invoice_numbering_router)
 
 
 @app.get("/health")
@@ -194,8 +196,23 @@ def create_invoice_with_lines(
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     
+    # Auto-generate invoice number if not provided or if empty
+    invoice_number = payload.number.strip() if payload.number else None
+    if not invoice_number:
+        # Generate automatic number using the numbering service
+        from app.services.invoice_numbering_service import InvoiceNumberingService
+        try:
+            invoice_number = InvoiceNumberingService.generate_number(
+                db=db,
+                organization_id=organization.id,
+                year=None,  # Current year
+                prefix=None  # Default prefix based on organization
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to generate invoice number: {str(e)}")
+    
     # Check invoice number uniqueness
-    existing = db.scalar(select(Invoice).where(Invoice.organization_id == organization.id, Invoice.number == payload.number))
+    existing = db.scalar(select(Invoice).where(Invoice.organization_id == organization.id, Invoice.number == invoice_number))
     if existing:
         raise HTTPException(status_code=409, detail="Invoice number already exists")
     
@@ -219,7 +236,7 @@ def create_invoice_with_lines(
     invoice = Invoice(
         organization_id=organization.id,
         customer_id=payload.customer_id,
-        number=payload.number,
+        number=invoice_number,
         currency=payload.currency,
         status=InvoiceStatus.DRAFT.value,
         notes=payload.notes,

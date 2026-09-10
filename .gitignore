@@ -4,39 +4,31 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
-env/
-venv/
+
+# Dependencies
 .venv/
-.ENV
-.python-version
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
+venv/
+env/
+
+# Logs
 *.log
-*.pot
-*.pyc
-*.pyo
-*.pyd
-*.so
-.TemporaryItems
-.deps
-.pytest_cache/
-.mypy_cache/
-.hypothesis/
 
-# Database
-*.db
-*.db-journal
-
-# Environment
+# Environment variables
 .env
 .env.local
-.env.*
+*.env.*
+
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
+# Testing
+.pytest_cache/
+.coverage*
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
 ```

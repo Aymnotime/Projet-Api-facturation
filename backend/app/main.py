@@ -23,7 +23,7 @@ from .schemas import (
     PaginatedCustomers,
     PaginatedInvoices,
 )
-from .security import generate_api_key, require_organization
+from .security import generate_api_key, require_organization, require_organization_with_idempotency
 from .tasks.invoice_tasks import generate_invoice_pdf, validate_invoice_en16931
 from .core.logic import (
     calculate_invoice_totals,
@@ -33,6 +33,15 @@ from .core.logic import (
     InvoiceStatus,
     get_next_valid_statuses,
 )
+from .api.auth import router as auth_router
+from .api.users import router as users_router
+from .api.idempotency import IdempotencyHandler
+from .api.invoice_numbering import router as invoice_numbering_router
+from fastapi import Request
+from sqlalchemy.orm import Session
+from .db import get_db
+from app.services.idempotency_service import IdempotencyService
+import json
 
 class InvoiceLineCreate(BaseModel):
     description: str = Field(min_length=1, max_length=500)
@@ -75,7 +84,16 @@ class InvoiceReadWithLines(InvoiceRead):
     purchase_order_number: Optional[str] = None
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="Projet API Facturation", version="0.3.0", description="API-first billing infrastructure with full business logic")
+app = FastAPI(
+    title="Projet API Facturation", 
+    version="0.4.0", 
+    description="API-first billing infrastructure with Identity, Users, RBAC and full business logic"
+)
+
+# Include routers
+app.include_router(auth_router)
+app.include_router(users_router)
+app.include_router(invoice_numbering_router)
 
 
 @app.get("/health")
@@ -109,12 +127,33 @@ def create_api_key(
 
 @app.post("/v1/customers", response_model=CustomerRead, status_code=201)
 def create_customer(
-    payload: CustomerCreate, organization: Organization = Depends(require_organization), db: Session = Depends(get_db)
+    payload: CustomerCreate, 
+    organization: Organization = Depends(require_organization), 
+    db: Session = Depends(get_db),
+    request: Request = None,
+    idempotency_result: dict = Depends(IdempotencyHandler())
 ) -> Customer:
+    # Check for cached response from idempotency
+    if idempotency_result.get("cached_response"):
+        return idempotency_result["cached_response"]
+    
     customer = Customer(organization_id=organization.id, **payload.model_dump())
     db.add(customer)
     db.commit()
     db.refresh(customer)
+    
+    # Store response for idempotency if key was provided
+    if idempotency_result.get("idempotency_key"):
+        try:
+            IdempotencyService.store_response(
+                db=db,
+                idempotency_key=idempotency_result["idempotency_key"],
+                response_status=201,
+                response_body={"id": customer.id, "name": customer.name, "email": customer.email}
+            )
+        except Exception:
+            pass  # Don't fail on idempotency storage error
+    
     return customer
 
 
@@ -140,15 +179,40 @@ def list_customers(
 def create_invoice_with_lines(
     payload: InvoiceCreateWithLines, 
     organization: Organization = Depends(require_organization), 
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    idempotency_result: dict = Depends(IdempotencyHandler())
 ) -> Invoice:
+    # Check for cached response from idempotency
+    if idempotency_result.get("cached_response"):
+        # Return the cached response directly
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=idempotency_result["cached_response"].status_code,
+            content=json.loads(idempotency_result["cached_response"].body.decode('utf-8'))
+        )
+    
     # Verify customer exists and belongs to organization
     customer = db.scalar(select(Customer).where(Customer.id == payload.customer_id, Customer.organization_id == organization.id))
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     
+    # Auto-generate invoice number if not provided or if empty
+    invoice_number = payload.number.strip() if payload.number else None
+    if not invoice_number:
+        # Generate automatic number using the numbering service
+        from app.services.invoice_numbering_service import InvoiceNumberingService
+        try:
+            invoice_number = InvoiceNumberingService.generate_number(
+                db=db,
+                organization_id=organization.id,
+                year=None,  # Current year
+                prefix=None  # Default prefix based on organization
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to generate invoice number: {str(e)}")
+    
     # Check invoice number uniqueness
-    existing = db.scalar(select(Invoice).where(Invoice.organization_id == organization.id, Invoice.number == payload.number))
+    existing = db.scalar(select(Invoice).where(Invoice.organization_id == organization.id, Invoice.number == invoice_number))
     if existing:
         raise HTTPException(status_code=409, detail="Invoice number already exists")
     
@@ -172,7 +236,7 @@ def create_invoice_with_lines(
     invoice = Invoice(
         organization_id=organization.id,
         customer_id=payload.customer_id,
-        number=payload.number,
+        number=invoice_number,
         currency=payload.currency,
         status=InvoiceStatus.DRAFT.value,
         notes=payload.notes,
@@ -209,6 +273,53 @@ def create_invoice_with_lines(
     
     db.commit()
     db.refresh(invoice)
+    
+    # Store response for idempotency if key was provided
+    if idempotency_result.get("idempotency_key"):
+        try:
+            from app.schemas import InvoiceReadWithLines as SchemaInvoiceReadWithLines
+            response_data = {
+                "id": invoice.id,
+                "organization_id": invoice.organization_id,
+                "customer_id": invoice.customer_id,
+                "number": invoice.number,
+                "currency": invoice.currency,
+                "status": invoice.status,
+                "issue_date": invoice.issue_date,
+                "due_date": invoice.due_date,
+                "issued_at": invoice.issued_at,
+                "subtotal_minor": invoice.subtotal_minor,
+                "tax_total_minor": invoice.tax_total_minor,
+                "total_minor": invoice.total_minor,
+                "amount_due_minor": invoice.amount_due_minor,
+                "notes": invoice.notes,
+                "payment_terms": invoice.payment_terms,
+                "purchase_order_number": invoice.purchase_order_number,
+                "created_at": invoice.created_at,
+                "updated_at": invoice.updated_at,
+                "lines": [
+                    {
+                        "id": line.id,
+                        "description": line.description,
+                        "quantity": line.quantity,
+                        "unit_price_minor": line.unit_price_minor,
+                        "tax_rate": line.tax_rate,
+                        "line_total_minor": line.line_total_minor,
+                        "tax_amount_minor": line.tax_amount_minor,
+                        "line_gross_minor": line.line_gross_minor,
+                        "product_code": line.product_code
+                    }
+                    for line in invoice.lines
+                ]
+            }
+            IdempotencyService.store_response(
+                db=db,
+                idempotency_key=idempotency_result["idempotency_key"],
+                response_status=201,
+                response_body=response_data
+            )
+        except Exception as e:
+            pass  # Don't fail on idempotency storage error
     
     # Trigger async validation and PDF generation
     import os

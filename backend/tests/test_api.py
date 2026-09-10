@@ -1,17 +1,15 @@
+"""Tests for API endpoints."""
+import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
 
-client = TestClient(app)
-
-
-def test_health() -> None:
+def test_health(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
 
-def test_create_organization_and_api_key() -> None:
+def test_create_organization_and_api_key(client: TestClient) -> None:
     organization = client.post("/v1/organizations", json={"name": "Acme"})
     assert organization.status_code == 201
     organization_id = organization.json()["id"]

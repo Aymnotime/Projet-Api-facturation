@@ -72,7 +72,9 @@ class TestInvoiceNumberingService:
             prefix="INV"
         )
         
-        assert number == "INV-2025-0001"
+        from datetime import datetime
+        current_year = datetime.now().year
+        assert number == f"INV-{current_year}-0001"
     
     def test_generate_number_with_custom_year(self, db_session, test_organization):
         """Teste la génération avec une année personnalisée."""

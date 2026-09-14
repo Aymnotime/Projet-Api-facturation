@@ -97,9 +97,6 @@ def auth_headers(test_organization, db_session):
     # Create an API key for the test organization
     raw_key, prefix, key_hash = generate_api_key()
     
-    api_key = Organization(id=test_organization.id)
-    db_session.add(api_key)
-    
     from app.models import ApiKey
     api_key_obj = ApiKey(
         organization_id=test_organization.id,

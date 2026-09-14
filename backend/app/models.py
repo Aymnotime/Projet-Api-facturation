@@ -92,6 +92,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     organization: Mapped[Organization] = relationship(back_populates="users")
+    invitations: Mapped[list["Invitation"]] = relationship(back_populates="accepted_user", foreign_keys="Invitation.accepted_user_id")
 
 
 class ApiKey(Base):
@@ -157,6 +158,7 @@ class Invoice(Base):
     lines: Mapped[list["InvoiceLine"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
     transmissions: Mapped[list["Transmission"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
     events: Mapped[list["Event"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
+    payments: Mapped[list["Payment"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("organization_id", "number", name="uq_invoice_org_number"),

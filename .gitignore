@@ -25,24 +25,19 @@ wheels/
 *.db
 *.db-journal
 
-# Environment
-.env
-.env.local
-.env.*
-.env~*
-.venv/
-venv/
-ENV/
-
-# Logs
-*.log
-
 # Testing
 .pytest_cache/
 .coverage
 htmlcov/
 coverage/
-.nyc_output/
+
+# Environment
+.env
+.env.local
+*.env.*
+.venv/
+venv/
+ENV/
 
 # IDE
 .vscode/

@@ -20,89 +20,74 @@ from app.core.logic import validate_en16931_basic
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(bind=True, max_retries=5, default_retry_delay=60)
-def generate_invoice_pdf(self: Task, invoice_id: str) -> dict[str, Any]:
+def build_invoice_pdf_bytes(db, invoice: Invoice, organization: Organization) -> bytes:
+    """Génère le PDF de la facture et retourne les octets.
+
+    Réutilisable : tâche Celery ``generate_invoice_pdf`` et endpoint
+    d'export Factur-X (``GET /v1/invoices/{id}/export/factur-x``).
     """
-    Generate PDF for an invoice asynchronously with Factur-X support.
-    
-    Creates a professional PDF invoice with:
-    - Header with invoice number and status
-    - Seller and buyer information
-    - Line items table
-    - Totals breakdown (HT, TVA, TTC)
-    - Payment terms and notes
-    
-    Returns dict with status, file size, and metadata.
-    """
-    db = SessionLocal()
-    try:
-        invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
-        if not invoice:
-            logger.error(f"Invoice {invoice_id} not found")
-            return {"status": "error", "message": "Invoice not found"}
-        
-        customer = db.query(Customer).filter(Customer.id == invoice.customer_id).first()
-        organization = db.query(Organization).filter(Organization.id == invoice.organization_id).first()
-        
-        if not customer or not organization:
-            logger.error(f"Customer or organization not found for invoice {invoice_id}")
-            return {"status": "error", "message": "Customer or organization not found"}
-        
-        # Fetch line items
-        lines = db.query(InvoiceLine).filter(InvoiceLine.invoice_id == invoice_id).order_by(InvoiceLine.position).all()
-        
-        # Create PDF in memory
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(
-            buffer, 
-            pagesize=A4, 
-            rightMargin=2*cm, 
-            leftMargin=2*cm, 
-            topMargin=2*cm, 
-            bottomMargin=2*cm
-        )
-        elements = []
-        
-        # Styles
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            'CustomTitle', 
-            parent=styles['Heading1'], 
-            fontSize=18, 
-            spaceAfter=1*cm,
-            textColor=colors.HexColor('#2C3E50')
-        )
-        normal_style = styles['Normal']
-        small_style = ParagraphStyle('Small', parent=styles['Normal'], fontSize=8)
-        
-        # Title
-        elements.append(Paragraph(f"FACTURE N° {invoice.number}", title_style))
-        elements.append(Spacer(1, 0.3*cm))
-        
-        # Invoice info table
-        invoice_info = [
-            ["Date d'émission:", invoice.issue_date.strftime('%d/%m/%Y') if invoice.issue_date else "En attente"],
-            ["Statut:", invoice.status.upper()],
-            ["Devise:", invoice.currency],
-            ["Référence PO:", invoice.purchase_order_number or "N/A"],
-        ]
-        info_table = Table(invoice_info, colWidths=[5*cm, 7*cm])
-        info_table.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 9),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ]))
-        elements.append(info_table)
-        elements.append(Spacer(1, 1*cm))
-        
-        # Seller info
-        elements.append(Paragraph("<b>Émetteur:</b>", normal_style))
-        elements.append(Paragraph(organization.name, normal_style))
-        elements.append(Spacer(1, 0.3*cm))
-        
-        # Customer info
+    customer = db.query(Customer).filter(Customer.id == invoice.customer_id).first()
+    lines = (
+        db.query(InvoiceLine)
+        .filter(InvoiceLine.invoice_id == invoice.id)
+        .order_by(InvoiceLine.position)
+        .all()
+    )
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=2*cm,
+        leftMargin=2*cm,
+        topMargin=2*cm,
+        bottomMargin=2*cm
+    )
+    elements = []
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        spaceAfter=1*cm,
+        textColor=colors.HexColor('#2C3E50')
+    )
+    normal_style = styles['Normal']
+    small_style = ParagraphStyle('Small', parent=styles['Normal'], fontSize=8)
+
+    elements.append(Paragraph(f"FACTURE N° {invoice.number}", title_style))
+    elements.append(Spacer(1, 0.3*cm))
+
+    invoice_info = [
+        ["Date d'émission:", invoice.issue_date.strftime('%d/%m/%Y') if invoice.issue_date else "En attente"],
+        ["Statut:", str(invoice.status).upper()],
+        ["Devise:", invoice.currency],
+        ["Référence PO:", invoice.purchase_order_number or "N/A"],
+    ]
+    info_table = Table(invoice_info, colWidths=[5*cm, 7*cm])
+    info_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(info_table)
+    elements.append(Spacer(1, 1*cm))
+
+    elements.append(Paragraph("<b>Émetteur:</b>", normal_style))
+    elements.append(Paragraph(organization.name, normal_style))
+    seller_parts = []
+    if organization.siret:
+        seller_parts.append(f"SIRET: {organization.siret}")
+    if organization.tax_id:
+        seller_parts.append(f"TVA: {organization.tax_id}")
+    if seller_parts:
+        elements.append(Paragraph(" | ".join(seller_parts), small_style))
+    elements.append(Spacer(1, 0.3*cm))
+
+    if customer:
         elements.append(Paragraph("<b>Client:</b>", normal_style))
         elements.append(Paragraph(customer.name, normal_style))
         if customer.email:
@@ -122,84 +107,96 @@ def generate_invoice_pdf(self: Task, invoice_id: str) -> dict[str, Any]:
             address_parts.append(customer.country)
         if address_parts:
             elements.append(Paragraph("Adresse: " + ", ".join(address_parts), small_style))
-        elements.append(Spacer(1, 1*cm))
-        
-        # Line items table
-        elements.append(Paragraph("<b>Détail des prestations:</b>", normal_style))
-        elements.append(Spacer(1, 0.3*cm))
-        
-        # Table headers
-        line_data = [["Description", "Qté", "Prix Unit.", "TVA %", "Total HT"]]
-        for line in lines:
-            line_data.append([
-                line.description[:40] + "..." if len(line.description) > 40 else line.description,
-                f"{line.quantity:.2f} {line.unit}",
-                f"{Decimal(line.unit_price_minor) / 100:.2f} {invoice.currency}",
-                f"{line.tax_rate:.2f}%",
-                f"{Decimal(line.line_total_minor) / 100:.2f} {invoice.currency}"
-            ])
-        
-        line_table = Table(line_data, colWidths=[7*cm, 2*cm, 3*cm, 2*cm, 3*cm])
-        line_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#34495E')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('TOPPADDING', (0, 0), (-1, 0), 8),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8F9FA')]),
-        ]))
-        elements.append(line_table)
+    elements.append(Spacer(1, 1*cm))
+
+    elements.append(Paragraph("<b>Détail des prestations:</b>", normal_style))
+    elements.append(Spacer(1, 0.3*cm))
+
+    line_data = [["Description", "Qté", "Prix Unit.", "TVA %", "Total HT"]]
+    for line in lines:
+        line_data.append([
+            line.description[:40] + "..." if len(line.description) > 40 else line.description,
+            f"{line.quantity:.2f} {line.unit}",
+            f"{Decimal(line.unit_price_minor) / 100:.2f} {invoice.currency}",
+            f"{line.tax_rate:.2f}%",
+            f"{Decimal(line.line_total_minor) / 100:.2f} {invoice.currency}"
+        ])
+
+    line_table = Table(line_data, colWidths=[7*cm, 2*cm, 3*cm, 2*cm, 3*cm])
+    line_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#34495E')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        ('TOPPADDING', (0, 0), (-1, 0), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8F9FA')]),
+    ]))
+    elements.append(line_table)
+    elements.append(Spacer(1, 0.5*cm))
+
+    totals_data = [
+        ["Total HT:", f"{Decimal(invoice.subtotal_minor) / 100:.2f} {invoice.currency}"],
+        ["Total TVA:", f"{Decimal(invoice.tax_total_minor) / 100:.2f} {invoice.currency}"],
+        ["<b>Total TTC:</b>", f"<b>{Decimal(invoice.total_minor) / 100:.2f} {invoice.currency}</b>"],
+        ["<b>Net à payer:</b>", f"<b>{Decimal(invoice.amount_due_minor) / 100:.2f} {invoice.currency}</b>"],
+    ]
+    totals_table = Table(totals_data, colWidths=[10*cm, 7*cm])
+    totals_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+        ('FONTNAME', (0, 2), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 11),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('LINEABOVE', (0, 2), (-1, 2), 2, colors.black),
+    ]))
+    elements.append(totals_table)
+
+    if invoice.payment_terms:
         elements.append(Spacer(1, 0.5*cm))
-        
-        # Totals section
-        totals_data = [
-            ["Total HT:", f"{Decimal(invoice.subtotal_minor) / 100:.2f} {invoice.currency}"],
-            ["Total TVA:", f"{Decimal(invoice.tax_total_minor) / 100:.2f} {invoice.currency}"],
-            ["<b>Total TTC:</b>", f"<b>{Decimal(invoice.total_minor) / 100:.2f} {invoice.currency}</b>"],
-            ["<b>Net à payer:</b>", f"<b>{Decimal(invoice.amount_due_minor) / 100:.2f} {invoice.currency}</b>"],
-        ]
-        totals_table = Table(totals_data, colWidths=[10*cm, 7*cm])
-        totals_table.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
-            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-            ('FONTNAME', (0, 2), (-1, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 11),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-            ('TOPPADDING', (0, 0), (-1, -1), 8),
-            ('LINEABOVE', (0, 2), (-1, 2), 2, colors.black),
-        ]))
-        elements.append(totals_table)
-        
-        # Payment terms
-        if invoice.payment_terms:
-            elements.append(Spacer(1, 0.5*cm))
-            elements.append(Paragraph("<b>Conditions de paiement:</b>", normal_style))
-            elements.append(Paragraph(invoice.payment_terms, normal_style))
-        
-        # Notes
-        if invoice.notes:
-            elements.append(Spacer(1, 0.5*cm))
-            elements.append(Paragraph("<b>Notes:</b>", normal_style))
-            elements.append(Paragraph(invoice.notes, normal_style))
-        
-        # Footer
-        elements.append(Spacer(1, 2*cm))
-        elements.append(Paragraph(
-            "<i>Cette facture est générée électroniquement. Aucun tampon ni signature manuscrite requis.</i>",
-            small_style
-        ))
-        
-        # Build PDF
-        doc.build(elements)
-        
-        pdf_size = len(buffer.getvalue())
-        buffer.close()
-        
+        elements.append(Paragraph("<b>Conditions de paiement:</b>", normal_style))
+        elements.append(Paragraph(invoice.payment_terms, normal_style))
+
+    if invoice.notes:
+        elements.append(Spacer(1, 0.5*cm))
+        elements.append(Paragraph("<b>Notes:</b>", normal_style))
+        elements.append(Paragraph(invoice.notes, normal_style))
+
+    elements.append(Spacer(1, 2*cm))
+    elements.append(Paragraph(
+        "<i>Cette facture est générée électroniquement. Aucun tampon ni signature manuscrite requis.</i>",
+        small_style
+    ))
+
+    doc.build(elements)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes
+
+
+@celery_app.task(bind=True, max_retries=5, default_retry_delay=60)
+def generate_invoice_pdf(self: Task, invoice_id: str) -> dict[str, Any]:
+    """Génère le PDF d'une facture de façon asynchrone (Factur-X ready)."""
+    db = SessionLocal()
+    try:
+        invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+        if not invoice:
+            logger.error(f"Invoice {invoice_id} not found")
+            return {"status": "error", "message": "Invoice not found"}
+
+        organization = db.query(Organization).filter(Organization.id == invoice.organization_id).first()
+        if not organization:
+            logger.error(f"Organization not found for invoice {invoice_id}")
+            return {"status": "error", "message": "Customer or organization not found"}
+
+        pdf_bytes = build_invoice_pdf_bytes(db, invoice, organization)
+        pdf_size = len(pdf_bytes)
+
         logger.info(f"PDF generated for invoice {invoice_id}: {pdf_size} bytes")
-        
+
         return {
             "status": "success",
             "invoice_id": invoice_id,
@@ -290,45 +287,44 @@ def validate_invoice_en16931(self: Task, invoice_id: str) -> dict[str, Any]:
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=120)
 def transmit_to_pdp(self: Task, transmission_id: str) -> dict[str, Any]:
+    """Transmet une facture à une PDP via l'adaptateur du fournisseur.
+
+    S'appuie sur ``TransmissionService`` : génération Factur-X (repli XML),
+    dépôt idempotent, persistance du statut et de la référence externe.
+    Les erreurs techniques de plateforme déclenchent un retry Celery ; le
+    rejet fonctionnel (document invalide) est définitif (pas de retry).
     """
-    Transmit invoice to PDP (Plateforme de Dématérialisation Partenaire).
-    
-    This is a placeholder for actual PDP integration (Chorus Pro, etc.).
-    In production, this would:
-    1. Generate Factur-X XML
-    2. Sign the document
-    3. Send via API to PDP provider
-    4. Handle response and update status
-    """
+    from app.models import Transmission
+    from app.services.pdp.adapter import PDPTransmissionError
+    from app.services.transmission_service import TransmissionService
+
     db = SessionLocal()
     try:
-        from app.models import Transmission
         transmission = db.query(Transmission).filter(Transmission.id == transmission_id).first()
-        
         if not transmission:
             return {"status": "error", "message": "Transmission not found"}
-        
-        # Simulate transmission (replace with actual PDP API call)
-        logger.info(f"Transmitting {transmission.pdp_provider} for transmission {transmission_id}")
-        
-        # TODO: Implement actual PDP integration
-        # - Generate Factur-X XML/UBL
-        # - Call PDP API
-        # - Handle authentication
-        # - Process response
-        
-        transmission.status = 'transmitted'
-        transmission.transmitted_at = datetime.now(timezone.utc)
-        db.commit()
-        
+
+        invoice = db.query(Invoice).filter(Invoice.id == transmission.invoice_id).first()
+        organization = db.query(Organization).filter(Organization.id == transmission.organization_id).first()
+        if not invoice or not organization:
+            return {"status": "error", "message": "Invoice or organization not found"}
+
+        service = TransmissionService(db)
+        try:
+            result_tx = service.submit_invoice(
+                organization, invoice.id, provider=transmission.pdp_provider
+            )
+        except PDPTransmissionError as exc:
+            # Erreur technique : la transmission est marquée FAILED en base, on retente.
+            raise self.retry(exc=exc, countdown=120)
+
         return {
             "status": "success",
-            "transmission_id": transmission_id,
-            "transmitted_at": datetime.now(timezone.utc).isoformat(),
-            "message": "Invoice transmitted to PDP (simulated)"
+            "transmission_id": result_tx.id,
+            "transmission_status": result_tx.status,
+            "external_reference": result_tx.external_reference,
+            "transmitted_at": result_tx.transmitted_at.isoformat() if result_tx.transmitted_at else None,
+            "message": f"Invoice transmitted to PDP '{transmission.pdp_provider}'",
         }
-    except Exception as exc:
-        logger.exception(f"Error transmitting invoice {transmission_id}")
-        raise self.retry(exc=exc, countdown=120)
     finally:
         db.close()

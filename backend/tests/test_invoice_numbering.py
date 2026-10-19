@@ -72,7 +72,8 @@ class TestInvoiceNumberingService:
             prefix="INV"
         )
         
-        assert number == "INV-2025-0001"
+        current_year = datetime.now().year
+        assert number == f"INV-{current_year}-0001"
     
     def test_generate_number_with_custom_year(self, db_session, test_organization):
         """Teste la génération avec une année personnalisée."""
@@ -316,7 +317,7 @@ class TestInvoiceNumberingAPI:
         assert response.status_code == 201
         data = response.json()
         assert "number" in data
-        assert data["number"].startswith("FAC-2025-")
+        assert data["number"].startswith(f"FAC-{datetime.now().year}-")
     
     def test_validate_number_endpoint_valid(self, client, auth_headers, test_organization):
         """Teste l'endpoint de validation avec un numéro valide."""
@@ -401,7 +402,7 @@ class TestInvoiceNumberingAPI:
         assert response.status_code == 201
         data = response.json()
         assert "number" in data
-        assert data["number"].startswith("FAC-2025-")
+        assert data["number"].startswith(f"FAC-{datetime.now().year}-")
     
     def test_create_invoice_with_custom_number(self, client, auth_headers, test_organization):
         """Teste que la création de facture accepte un numéro personnalisé."""

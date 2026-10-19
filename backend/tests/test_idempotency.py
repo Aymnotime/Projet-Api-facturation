@@ -3,15 +3,47 @@ Tests pour le système d'idempotence.
 """
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
 
 from app.main import app
 from app.models import IdempotencyKey, Organization, ApiKey, Customer, Invoice
-from app.db import get_db, engine, Base
+import app.db as app_db
+from app.db import get_db, Base
 from app.security import generate_api_key
+
+# Isolated test database: rebind the application's own engine/session factory
+# (app.db) to a dedicated file so this suite never shares (or corrupts) the
+# default billing.db used by other suites. The file is removed first so the
+# schema is always rebuilt from the current models (avoids stale "no column
+# named ..." errors).
+import os
+import tempfile
+
+TEST_DB_PATH = os.path.join(tempfile.gettempdir(), "billing_test_idempotency.db")
+if os.path.exists(TEST_DB_PATH):
+    os.remove(TEST_DB_PATH)
+engine = create_engine(
+    f"sqlite:///{TEST_DB_PATH}", connect_args={"check_same_thread": False}
+)
+app_db.engine = engine
+app_db.SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+Base.metadata.bind = engine
+TestingSessionLocal = app_db.SessionLocal
 
 # Create test database
 Base.metadata.create_all(bind=engine)
+
+
+def override_get_db():
+    db = TestingSessionLocal(bind=engine)
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+app.dependency_overrides[get_db] = override_get_db
 
 client = TestClient(app)
 
@@ -210,6 +242,19 @@ def test_idempotency_invoice_creation(test_org, test_api_key, test_customer):
         select(Invoice).where(Invoice.organization_id == test_org.id, Invoice.number == "INV-2024-TEST")
     )
     assert count is not None
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_invoices():
+    """Delete invoices created through the API before org/customer fixtures
+    tear down (invoices hold a non-nullable FK to customers)."""
+    yield
+    db = next(get_db())
+    for inv in db.scalars(select(Invoice)).all():
+        # Ne PAS mettre customer_id à None : la colonne est NOT NULL en base.
+        # Supprimer directement la facture (les lignes suivent en cascade).
+        db.delete(inv)
+    db.commit()
 
 
 def test_idempotency_without_key(test_org, test_api_key):

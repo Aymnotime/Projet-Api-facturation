@@ -10,10 +10,24 @@ from app.main import app
 from app.models import User, Organization, UserRole
 
 
-# Test database setup
-SQLALCHEMY_DATABASE_URL = "sqlite:///./test_auth.db"
+# Isolated test database: rebind the application's own engine/session factory
+# (app.db) to a dedicated file so this suite never shares state with other
+# suites. The file is removed first so the schema is always rebuilt from the
+# current models.
+import os
+import tempfile
+
+import app.db as app_db
+
+TEST_DB_PATH = os.path.join(tempfile.gettempdir(), "billing_test_auth.db")
+if os.path.exists(TEST_DB_PATH):
+    os.remove(TEST_DB_PATH)
+SQLALCHEMY_DATABASE_URL = f"sqlite:///{TEST_DB_PATH}"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+app_db.engine = engine
+app_db.SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+Base.metadata.bind = engine
+TestingSessionLocal = app_db.SessionLocal
 
 
 def override_get_db():
@@ -29,7 +43,8 @@ app.dependency_overrides[get_db] = override_get_db
 
 @pytest.fixture(scope="function")
 def client():
-    """Create test client with fresh database."""
+    """Create test client with a database reset between tests (no leakage)."""
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield TestClient(app)
     Base.metadata.drop_all(bind=engine)

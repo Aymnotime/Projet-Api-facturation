@@ -11,11 +11,35 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .config import get_settings
 from .db import get_db
 from .models import ApiKey, Organization, User, UserRole
 
-# JWT Configuration
-JWT_SECRET = secrets.token_urlsafe(32)  # In production, use environment variable
+
+_DEV_FALLBACK_SECRET: str | None = None
+
+
+def _jwt_secret() -> str:
+    """Secret JWT résolu à chaque appel via la configuration validée.
+
+    En dehors de la production, si ``JWT_SECRET`` n'est pas fourni on utilise
+    un secret de repli stable par processus (nécessaire pour que les tokens
+    émis par un test restent vérifiables plus tard dans le même run).
+    En production le validateur de ``Settings`` garantit qu'un secret
+    explicite est défini.
+    """
+    global _DEV_FALLBACK_SECRET
+    settings = get_settings()
+    if settings.jwt_secret:
+        return settings.jwt_secret
+    if _DEV_FALLBACK_SECRET is None:
+        _DEV_FALLBACK_SECRET = secrets.token_urlsafe(32)
+    return _DEV_FALLBACK_SECRET
+
+
+# JWT Configuration (valeurs par défaut rétro-compatibles ; la source de
+# vérité runtime est app.config.get_settings()).
+JWT_SECRET = ""  # sentinel : remplacé par _jwt_secret() à l'usage
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 7
@@ -45,24 +69,28 @@ def get_password_hash(password: str) -> str:
 
 def create_access_token(data: dict[str, Any], expires_delta: timedelta | None = None) -> str:
     """Create a JWT access token."""
+    settings = get_settings()
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=settings.access_token_expire_minutes)
+    )
     to_encode.update({"exp": expire, "type": "access"})
-    return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(to_encode, _jwt_secret(), algorithm=settings.jwt_algorithm)
 
 
 def create_refresh_token(data: dict[str, Any]) -> str:
     """Create a JWT refresh token."""
+    settings = get_settings()
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    expire = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
     to_encode.update({"exp": expire, "type": "refresh"})
-    return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(to_encode, _jwt_secret(), algorithm=settings.jwt_algorithm)
 
 
 def decode_token(token: str) -> dict[str, Any] | None:
     """Decode and validate a JWT token."""
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, _jwt_secret(), algorithms=[get_settings().jwt_algorithm])
         return payload
     except jwt.ExpiredSignatureError:
         return None
@@ -106,6 +134,7 @@ def require_organization_with_idempotency(
 
 
 def require_organization(
+    request: Request,
     authorization: str | None = Header(default=None), db: Session = Depends(get_db)
 ) -> Organization:
     """Require a valid API key and return the organization."""
@@ -119,6 +148,8 @@ def require_organization(
     # Update last used timestamp
     api_key.last_used_at = datetime.now(timezone.utc)
     db.commit()
+    # Expose l'identité au rate limiting (bucket par organisation).
+    request.state.organization_id = api_key.organization_id
     return api_key.organization
 
 
@@ -186,7 +217,12 @@ async def get_current_user(
     # Update last login time
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()
-    
+
+    # Expose l'identité au rate limiting (bucket par utilisateur).
+    request.state.user_id = user.id
+    if getattr(user, "organization_id", None):
+        request.state.organization_id = user.organization_id
+
     return user
 
 

@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -29,16 +29,25 @@ from ..security import (
     verify_mfa_code,
     verify_password,
 )
+from ..services.rate_limit import get_strict_rate_limiter
+from ..services.security_middleware import apply_rate_limit
 
 router = APIRouter(prefix="/v1/auth", tags=["Authentication"])
 
 
 @router.post("/register", response_model=UserRead, status_code=201)
-def register_user(payload: UserRegister, db: Session = Depends(get_db)) -> UserRead:
+def register_user(
+    request: Request,
+    payload: UserRegister,
+    db: Session = Depends(get_db),
+    limiter=Depends(get_strict_rate_limiter),
+) -> UserRead:
     """
     Register a new user with an organization.
     Creates both the organization and the user as OWNER.
+    Rate limited (strict) : endpoint non authentifié exposé au brute-force.
     """
+    apply_rate_limit(request, limiter, bucket_prefix="auth")
     # Check if email already exists
     existing_user = db.scalar(select(User).where(User.email == payload.email))
     if existing_user:
@@ -70,11 +79,18 @@ def register_user(payload: UserRegister, db: Session = Depends(get_db)) -> UserR
 
 
 @router.post("/login", response_model=Token)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> Token:
+def login(
+    request: Request,
+    payload: LoginRequest,
+    db: Session = Depends(get_db),
+    limiter=Depends(get_strict_rate_limiter),
+) -> Token:
     """
     Authenticate user and return access/refresh tokens.
     If MFA is enabled, mfa_code is required.
+    Rate limited (strict) : anti brute-force sur les identifiants.
     """
+    apply_rate_limit(request, limiter, bucket_prefix="auth")
     # Find user by email
     user = db.scalar(select(User).where(User.email == payload.email))
     if not user or not user.is_active:
@@ -123,10 +139,17 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> Token:
 
 
 @router.post("/refresh", response_model=Token)
-def refresh_token(payload: TokenRefresh, db: Session = Depends(get_db)) -> Token:
+def refresh_token(
+    request: Request,
+    payload: TokenRefresh,
+    db: Session = Depends(get_db),
+    limiter=Depends(get_strict_rate_limiter),
+) -> Token:
     """
     Refresh access token using a valid refresh token.
+    Rate limited (strict).
     """
+    apply_rate_limit(request, limiter, bucket_prefix="auth")
     token_payload = decode_token(payload.refresh_token)
     if not token_payload or token_payload.get("type") != "refresh":
         raise HTTPException(

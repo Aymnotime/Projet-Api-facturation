@@ -6,7 +6,7 @@
 - POST /v1/transmissions/{id}/refresh      : ré-interroger le cycle de vie PDP
 - GET  /v1/transmissions/providers         : fournisseurs enregistrés
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,8 @@ from app.schemas import (
 )
 from app.security import require_organization
 from app.services.pdp.adapter import PDPTransmissionError, registered_providers
+from app.services.rate_limit import RateLimiter, get_rate_limiter
+from app.services.security_middleware import apply_rate_limit
 from app.services.transmission_service import TransmissionService
 
 router = APIRouter(prefix="/v1/transmissions", tags=["transmissions"])
@@ -38,11 +40,18 @@ def _get_transmission_or_404(db: Session, organization: Organization, transmissi
 
 @router.post("", response_model=TransmissionRead, status_code=status.HTTP_201_CREATED)
 def submit_transmission(
+    request: Request,
     payload: TransmissionSubmitRequest,
     organization: Organization = Depends(require_organization),
     db: Session = Depends(get_db),
+    limiter: RateLimiter | None = Depends(get_rate_limiter),
 ) -> Transmission:
-    """Transmet une facture émise à une PDP via l'adaptateur du fournisseur."""
+    """Transmet une facture émise à une PDP via l'adaptateur du fournisseur.
+
+    Rate limited : les appels PDP sortants sont coûteux et doivent être
+    protégés contre les rafales de soumissions.
+    """
+    apply_rate_limit(request, limiter, bucket_prefix="submit")
     service = TransmissionService(db)
     try:
         return service.submit_invoice(

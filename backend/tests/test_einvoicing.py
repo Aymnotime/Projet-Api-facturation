@@ -191,8 +191,10 @@ class TestFacturXXml:
         )
 
         def get(tag):
-            el = _local(mt, tag)
-            return Decimal(_amount_text(el)), el.get("currencyID")
+            # ram:SpecifiedTradeSettlementHeaderMonetarySummation porte des
+            # montants typés udt:Amount : la valeur est dans l'enfant.
+            node = _local(_local(mt, tag), "Amount")
+            return Decimal(_amount_text(node)), node.get("currencyID")
 
         assert get("LineTotalAmount") == (Decimal("2000.00"), None)
         assert get("TaxBasisTotalAmount") == (Decimal("2000.00"), None)
@@ -299,9 +301,15 @@ class TestUbl:
         # références de lignes / documents associés)
         ids = [el.text for el in root.iter() if el.tag.split("}")[1] == "ID" and el.text]
         assert ids[0] == "FACT-2026-0001"
-        texts = {el.tag.split("}")[1]: el.text for el in root.iter() if el.text}
-        assert texts.get("RegistrationName") == "Vendeur SA"
-        assert texts.get("DocumentCurrencyCode") == "EUR"
+        # plusieurs nœuds peuvent partager le même tag (vendeur ET acheteur
+        # portent un RegistrationName) : on collecte toutes les valeurs.
+        texts: dict[str, list[str]] = {}
+        for el in root.iter():
+            if el.text:
+                texts.setdefault(el.tag.split("}")[1], []).append(el.text)
+        assert "Vendeur SA" in texts.get("RegistrationName", [])
+        assert "Client SARL" in texts.get("RegistrationName", [])
+        assert "EUR" in texts.get("DocumentCurrencyCode", [])
 
     def test_credit_note_variant(self, sample_doc):
         sample_doc.is_credit_note = True
@@ -326,18 +334,19 @@ class TestFactory:
             organization_id=org.id, name="Client X", email="c@x.fr", tax_id="FR22222222222",
             address_line1="2 rue B", postal_code="33000", city="Bordeaux", country="FR",
         )
+        db_session.add(customer)
+        db_session.flush()
+
         invoice = Invoice(
-            organization_id=org.id, customer_id=None, number="F-1",
+            organization_id=org.id, customer_id=customer.id, number="F-1",
             currency="EUR", status="issued",
             issue_date=datetime(2026, 5, 1, tzinfo=timezone.utc),
             due_date=datetime(2026, 6, 1, tzinfo=timezone.utc),
             subtotal_minor=10000, tax_total_minor=2000, total_minor=12000,
             amount_due_minor=12000, purchase_order_number="PO-9",
         )
-        db_session.add_all([customer, invoice])
+        db_session.add(invoice)
         db_session.flush()
-        # le client est rattaché à la facture seulement après flush des deux
-        invoice.customer_id = customer.id
 
         line = InvoiceLine(
             organization_id=org.id, invoice_id=invoice.id, description="Service",

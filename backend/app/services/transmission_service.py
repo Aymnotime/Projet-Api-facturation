@@ -152,10 +152,10 @@ class TransmissionService:
             pdp_provider=provider,
             status=TransmissionStatus.READY_TO_SEND.value,
         )
-        transmission.attempt_count += 1
+        transmission.attempt_count = (transmission.attempt_count or 0) + 1
         transmission.last_attempt_at = datetime.now(timezone.utc)
         transmission.error_message = None
-        if transmission not in self.db.session:
+        if transmission not in self.db:
             self.db.add(transmission)
 
         try:

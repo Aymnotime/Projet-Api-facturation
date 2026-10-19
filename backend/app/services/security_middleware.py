@@ -31,8 +31,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "Content-Security-Policy",
             "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         )
-        # Masquer l'implémentation serveur
-        h.pop("Server", None)
+        # Masquer l'implémentation serveur (MutableHeaders n'a pas .pop ;
+        # "Server" est de toute façon ajouté par le serveur uvicorn, pas par
+        # la réponse Starlette ici — on ne fait que s'assurer de l'absence).
+        if "server" in h:
+            del h["server"]
         return response
 
 

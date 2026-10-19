@@ -137,4 +137,4 @@ def get_rate_limiter() -> RateLimiter | None:
 
 def get_strict_rate_limiter() -> RateLimiter | None:
     """Dépendance : limiteur strict (endpoints sensibles non authentifiés)."""
-    return build_strict_rate_limiter()
+    return build_strict_limiter()

@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from .models import UserRole
 
@@ -313,3 +313,54 @@ class PDPProvidersResponse(BaseModel):
     """Liste des fournisseurs PDP enregistrés."""
 
     providers: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Webhooks
+# ---------------------------------------------------------------------------
+
+class WebhookEndpointCreate(BaseModel):
+    url: str = Field(min_length=8, max_length=512)
+    events: list[str] = Field(min_length=1, max_length=20)
+    secret: str | None = Field(default=None, min_length=10, max_length=255)
+
+
+class WebhookEndpointRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    organization_id: str
+    url: str
+    events: list[str]
+    is_active: bool
+    created_at: datetime | None = None
+
+    @field_validator("events", mode="before")
+    @classmethod
+    def _parse_events(cls, value):
+        if isinstance(value, str):
+            import json as _json
+            try:
+                return _json.loads(value)
+            except ValueError:
+                return []
+        return value
+
+
+class WebhookDeliveryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    webhook_id: str
+    event_type: str
+    status: str
+    http_status: int | None
+    attempt_count: int
+    error_message: str | None
+    delivered_at: datetime | None
+    created_at: datetime | None
+
+
+class WebhookTestRequest(BaseModel):
+    event_type: str = Field(default="webhook.test", min_length=1, max_length=64)
+    data: dict = Field(default_factory=dict)

@@ -260,9 +260,10 @@ class WebhookDelivery(Base):
     webhook_id: Mapped[str] = mapped_column(ForeignKey("webhook_endpoints.id", ondelete="CASCADE"), index=True)
     event_type: Mapped[str] = mapped_column(String(64))
     payload: Mapped[str] = mapped_column(Text)  # JSON string
-    status: Mapped[str] = mapped_column(String(32), default="pending")  # pending, success, failed
+    status: Mapped[str] = mapped_column(String(32), default="pending")  # pending, retrying, delivered, dead
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     response_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

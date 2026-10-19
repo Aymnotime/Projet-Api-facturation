@@ -17,6 +17,7 @@ from .api.invoices import router as invoices_router
 from .api.organizations import router as organizations_router
 from .api.transmissions import router as transmissions_router
 from .api.users import router as users_router
+from .api.webhooks import router as webhooks_router
 from .services.security_middleware import SecurityHeadersMiddleware
 
 # TODO: remplacer par les migrations Alembic une fois le schéma stabilisé.
@@ -57,6 +58,7 @@ app.include_router(customers_router)
 app.include_router(invoices_router)
 app.include_router(invoice_numbering_router)
 app.include_router(transmissions_router)
+app.include_router(webhooks_router)
 
 
 @app.get("/health")

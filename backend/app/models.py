@@ -56,6 +56,14 @@ class Organization(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(200))
+    # Champs émetteur pour la facturation électronique (EN 16931 / Factur-X)
+    siret: Mapped[str | None] = mapped_column(String(14), nullable=True)
+    tax_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # TVA intracommunautaire
+    address_line1: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    postal_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    country: Mapped[str] = mapped_column(String(2), default="FR")
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     api_keys: Mapped[list["ApiKey"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
     customers: Mapped[list["Customer"]] = relationship(back_populates="organization", cascade="all, delete-orphan")

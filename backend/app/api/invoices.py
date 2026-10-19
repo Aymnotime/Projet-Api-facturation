@@ -361,3 +361,81 @@ def delete_invoice(
 
     db.delete(invoice)
     db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Exports facturation électronique (EN 16931)
+# ---------------------------------------------------------------------------
+
+
+def _load_document_data(db: Session, organization: Organization, invoice_id: str):
+    """Charge facture+client et construit le DTO Factur-X ; 404/422 sinon."""
+    from app.services.einvoicing_factory import document_from_invoice
+
+    invoice = _get_invoice_or_404(db, organization, invoice_id)
+    customer = db.get(Customer, invoice.customer_id) if invoice.customer_id else None
+    if not customer:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invoice has no customer; cannot generate e-invoicing format",
+        )
+    return invoice, document_from_invoice(invoice, organization, customer)
+
+
+@router.get("/{invoice_id}/export/xml")
+def export_invoice_xml(
+    invoice_id: str,
+    organization: Organization = Depends(require_organization),
+    db: Session = Depends(get_db),
+) -> Response:
+    """XML Factur-X (Cross Industry Invoice EN 16931)."""
+    from app.services.einvoicing import build_cii_xml
+
+    invoice, doc = _load_document_data(db, organization, invoice_id)
+    xml_bytes = build_cii_xml(doc)
+    filename = f"facture-{invoice.number}.xml"
+    return Response(
+        content=xml_bytes,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{invoice_id}/export/ubl")
+def export_invoice_ubl(
+    invoice_id: str,
+    organization: Organization = Depends(require_organization),
+    db: Session = Depends(get_db),
+) -> Response:
+    """XML UBL 2.1 (interopérabilité internationale, sémantique EN 16931)."""
+    from app.services.einvoicing import generate_ubl_xml
+
+    invoice, doc = _load_document_data(db, organization, invoice_id)
+    xml_bytes = generate_ubl_xml(doc)
+    filename = f"facture-{invoice.number}-ubl.xml"
+    return Response(
+        content=xml_bytes,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{invoice_id}/export/factur-x")
+def export_invoice_facturx(
+    invoice_id: str,
+    organization: Organization = Depends(require_organization),
+    db: Session = Depends(get_db),
+) -> Response:
+    """PDF hybride Factur-X : PDF lisible + XML CII en pièce jointe."""
+    from app.services.einvoicing import generate_factur_x
+    from app.tasks.invoice_tasks import build_invoice_pdf_bytes
+
+    invoice, doc = _load_document_data(db, organization, invoice_id)
+    pdf_bytes = build_invoice_pdf_bytes(db, invoice, organization)
+    hybrid, _ = generate_factur_x(pdf_bytes, doc)
+    filename = f"facture-{invoice.number}-factur-x.pdf"
+    return Response(
+        content=hybrid,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

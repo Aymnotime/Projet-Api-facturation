@@ -39,6 +39,20 @@ from app.services.einvoicing_factory import document_from_invoice
 
 NS_R = "urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"
 NS_RAM = "urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100"
+NS_UDT = "urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100"
+
+
+def _local(parent, tag):
+    """Sélecteur robuste : le namespace udt:* est parfois redéclaré avec un
+    préfixe différent par les générateurs ; on filtre donc sur local-name().
+    lxml ne supporte pas local-name() dans find(), d'où etree.xpath."""
+    return parent.xpath(f"*[local-name()='{tag}']")[0]
+
+
+def _amount_text(el) -> str:
+    """Contenu textuel normalisé (les XML pretty-printés portent des nœuds de
+    whitespace avant la valeur)."""
+    return (el.text or "").strip()
 
 
 @pytest.fixture
@@ -150,7 +164,7 @@ class TestFacturXXml:
         exd = root.find(f"{{{NS_R}}}ExchangedDocument")
         assert exd.find(f"{{{NS_RAM}}}ID").text == "FACT-2026-0001"
         assert exd.find(f"{{{NS_RAM}}}TypeCode").text == "380"
-        issue = exd.find(f"{{{NS_RAM}}}IssueDateTime/*[local-name()='DateTimeString']")
+        issue = _local(exd.find(f"{{{NS_RAM}}}IssueDateTime"), "DateTimeString")
         assert issue.text == "2026-03-01"
         assert issue.get("format") == "102"
 
@@ -177,8 +191,8 @@ class TestFacturXXml:
         )
 
         def get(tag):
-            el = mt.find(f"{{{NS_RAM}}}{tag}/*[local-name()='Amount']")
-            return Decimal(el.text), el.get("currencyID")
+            el = _local(mt, tag)
+            return Decimal(_amount_text(el)), el.get("currencyID")
 
         assert get("LineTotalAmount") == (Decimal("2000.00"), None)
         assert get("TaxBasisTotalAmount") == (Decimal("2000.00"), None)
@@ -253,6 +267,9 @@ class TestFacturXHybrid:
         attachments = reader.attachments
         assert "factur-x.xml" in attachments
         extracted = attachments["factur-x.xml"]
+        # pypdf renvoie une liste de bytes (un flux par fichier joint)
+        if isinstance(extracted, list):
+            extracted = extracted[0]
         # le fichier extrait est bien le XML CII (décompression transparente)
         root = ET.fromstring(extracted)
         assert root.tag.startswith("{urn:un:unece")
@@ -278,8 +295,11 @@ class TestUbl:
     def test_structure(self, sample_doc):
         root = ET.fromstring(generate_ubl_xml(sample_doc))
         assert root.tag.endswith("Invoice")
+        # le premier <ID> est celui de la facture (les suivants portent les
+        # références de lignes / documents associés)
+        ids = [el.text for el in root.iter() if el.tag.split("}")[1] == "ID" and el.text]
+        assert ids[0] == "FACT-2026-0001"
         texts = {el.tag.split("}")[1]: el.text for el in root.iter() if el.text}
-        assert texts.get("ID") == "FACT-2026-0001"
         assert texts.get("RegistrationName") == "Vendeur SA"
         assert texts.get("DocumentCurrencyCode") == "EUR"
 
@@ -299,22 +319,26 @@ class TestFactory:
             name="Acme Factures", siret="11111111111111", tax_id="FR11111111111",
             address_line1="10 rue A", postal_code="75002", city="Paris", country="FR",
         )
+        db_session.add(org)
+        db_session.flush()
+
         customer = Customer(
-            organization_id="", name="Client X", email="c@x.fr", tax_id="FR22222222222",
+            organization_id=org.id, name="Client X", email="c@x.fr", tax_id="FR22222222222",
             address_line1="2 rue B", postal_code="33000", city="Bordeaux", country="FR",
         )
-        db_session.add_all([org, customer])
-        db_session.flush()
-        customer.organization_id = org.id
-
         invoice = Invoice(
-            organization_id=org.id, customer_id=customer.id, number="F-1",
+            organization_id=org.id, customer_id=None, number="F-1",
             currency="EUR", status="issued",
             issue_date=datetime(2026, 5, 1, tzinfo=timezone.utc),
             due_date=datetime(2026, 6, 1, tzinfo=timezone.utc),
             subtotal_minor=10000, tax_total_minor=2000, total_minor=12000,
             amount_due_minor=12000, purchase_order_number="PO-9",
         )
+        db_session.add_all([customer, invoice])
+        db_session.flush()
+        # le client est rattaché à la facture seulement après flush des deux
+        invoice.customer_id = customer.id
+
         line = InvoiceLine(
             organization_id=org.id, invoice_id=invoice.id, description="Service",
             quantity=Decimal("2"), unit="hour", unit_price_minor=5000,
@@ -397,6 +421,8 @@ class TestExportEndpoints:
         reader = PdfReader(io.BytesIO(r.content))
         assert "factur-x.xml" in reader.attachments
         xml_bytes = reader.attachments["factur-x.xml"]
+        if isinstance(xml_bytes, list):
+            xml_bytes = xml_bytes[0]
         assert b"CrossIndustryInvoice" in xml_bytes
 
     def test_export_unknown_invoice_404(self, client, auth_headers):

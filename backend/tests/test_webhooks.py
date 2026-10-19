@@ -142,6 +142,14 @@ def _make_task_result(retries: int = 0) -> MagicMock:
     return task
 
 
+def _run_bound(task_mock, *args):
+    """Exécute deliver_webhook avec self=task_mock (tâche bind=True sans broker)."""
+    from app.tasks.webhook_tasks import deliver_webhook
+
+    return deliver_webhook.__wrapped__(task_mock, *args)
+
+
+
 class TestCeleryDelivery:
     @patch("app.tasks.webhook_tasks._update_delivery")
     def test_success_marks_delivered(self, mock_update):
@@ -183,7 +191,7 @@ class TestCeleryDelivery:
         client.__enter__.return_value.post.return_value = response
         with patch("app.tasks.webhook_tasks.httpx.Client", return_value=client):
             with pytest.raises(TransientWebhookError):
-                deliver_webhook.bind().run(
+                _run_bound(
                     task, "dlv-3", "https://ex.com/hook", "whsec_x", "invoice.paid", {}
                 )
         # self.retry doit être appelé avec countdown = 30 * 2^2 = 120
@@ -198,7 +206,7 @@ class TestCeleryDelivery:
         client = MagicMock()
         client.__enter__.return_value.post.side_effect = httpx.ConnectError("boom")
         with patch("app.tasks.webhook_tasks.httpx.Client", return_value=client):
-            result = deliver_webhook.bind().run(
+            result = _run_bound(
                 task, "dlv-4", "https://ex.com/hook", "whsec_x", "invoice.paid", {}
             )
         assert result["status"] == "dead"

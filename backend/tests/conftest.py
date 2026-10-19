@@ -108,10 +108,19 @@ def auth_headers(test_organization, db_session):
     db_session.add(api_key_obj)
     db_session.commit()
     
-    def get_headers(org=None):
-        return {
-            "Authorization": f"Bearer {raw_key}",
-            "Content-Type": "application/json"
-        }
-    
-    return get_headers
+    headers = {
+        "Authorization": f"Bearer {raw_key}",
+        "Content-Type": "application/json",
+    }
+
+    class _AuthHeaders(dict):
+        """Headers utilisables tels quels ou appelés en fonction.
+
+        Compatibilité avec les deux styles d'usage dans les tests :
+        ``headers=auth_headers`` et ``headers=auth_headers(org)``.
+        """
+
+        def __call__(self, org=None):
+            return dict(self)
+
+    return _AuthHeaders(headers)

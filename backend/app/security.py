@@ -16,15 +16,25 @@ from .db import get_db
 from .models import ApiKey, Organization, User, UserRole
 
 
+_DEV_FALLBACK_SECRET: str | None = None
+
+
 def _jwt_secret() -> str:
     """Secret JWT résolu à chaque appel via la configuration validée.
 
-    En dehors de la production, si ``JWT_SECRET`` n'est pas fourni on génère
-    un secret éphémère (comportement historique acceptable pour le dev/test).
-    En production le validateur de ``Settings`` garantit qu'il est défini.
+    En dehors de la production, si ``JWT_SECRET`` n'est pas fourni on utilise
+    un secret de repli stable par processus (nécessaire pour que les tokens
+    émis par un test restent vérifiables plus tard dans le même run).
+    En production le validateur de ``Settings`` garantit qu'un secret
+    explicite est défini.
     """
+    global _DEV_FALLBACK_SECRET
     settings = get_settings()
-    return settings.jwt_secret or secrets.token_urlsafe(32)
+    if settings.jwt_secret:
+        return settings.jwt_secret
+    if _DEV_FALLBACK_SECRET is None:
+        _DEV_FALLBACK_SECRET = secrets.token_urlsafe(32)
+    return _DEV_FALLBACK_SECRET
 
 
 # JWT Configuration (valeurs par défaut rétro-compatibles ; la source de

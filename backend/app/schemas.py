@@ -334,6 +334,8 @@ class WebhookEndpointRead(BaseModel):
     events: list[str]
     is_active: bool
     created_at: datetime | None = None
+    # Secret HMAC en clair, renvoyé uniquement à la création (comme Stripe).
+    secret: str | None = None
 
     @field_validator("events", mode="before")
     @classmethod

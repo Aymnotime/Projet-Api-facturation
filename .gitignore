@@ -1,2 +1,13 @@
 __pycache__/
 *.pyc
+venv/
+.venv/
+.vscode/
+.idea/
+*.swp
+*.swo
+.env
+.env.local
+*.env.*
+*.log
+*.tmp

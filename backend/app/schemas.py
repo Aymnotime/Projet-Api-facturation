@@ -42,9 +42,9 @@ class CustomerRead(CustomerCreate):
 
 
 class InvoiceCreate(BaseModel):
-    customer_id: str
+    customer_id: str | None = None  # Optionnel en lecture : la colonne peut être NULL après annulation de la facture liée
     number: str = Field(min_length=1, max_length=64)
-    total_minor: int = Field(gt=0)
+    total_minor: int = Field(default=0, ge=0)
     currency: str = Field(default="EUR", min_length=3, max_length=3)
     notes: str | None = None
 
@@ -56,13 +56,65 @@ class InvoiceUpdate(BaseModel):
     notes: str | None = None
 
 
-class InvoiceRead(InvoiceCreate):
+class InvoiceRead(BaseModel):
+    """Lecture d'une facture (indépendante de InvoiceCreate : un client supprimé
+    met customer_id à NULL en cascade, ce qui n'est pas une donnée d'entrée valide)."""
+
     model_config = ConfigDict(from_attributes=True)
     id: str
     organization_id: str
+    customer_id: str | None = None
+    number: str
+    total_minor: int
+    currency: str
     status: str
     issued_at: datetime | None = None
     created_at: datetime
+
+
+# Schemas for invoices created with line items
+class InvoiceLineCreate(BaseModel):
+    description: str = Field(min_length=1, max_length=500)
+    quantity: Decimal = Field(default=Decimal("1.00"), gt=0)
+    unit_price_minor: int = Field(gt=0, description="Unit price excluding tax in cents")
+    tax_rate: Decimal = Field(default=Decimal("20.00"), ge=0, le=100, description="Tax rate percentage")
+    product_code: str | None = Field(default=None, max_length=64)
+
+
+class InvoiceCreateWithLines(BaseModel):
+    customer_id: str
+    number: str = Field(min_length=1, max_length=64)
+    currency: str = Field(default="EUR", min_length=3, max_length=3)
+    notes: str | None = None
+    payment_terms: str | None = None
+    purchase_order_number: str | None = None
+    lines: list[InvoiceLineCreate] = Field(..., min_length=1)
+
+
+class InvoiceLineRead(BaseModel):
+    id: str
+    description: str
+    quantity: Decimal
+    unit_price_minor: int
+    tax_rate: Decimal
+    line_total_minor: int
+    tax_amount_minor: int
+    line_gross_minor: int
+    product_code: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InvoiceReadWithLines(InvoiceRead):
+    lines: list[InvoiceLineRead] = []
+    subtotal_minor: int = 0
+    tax_total_minor: int = 0
+    amount_due_minor: int = 0
+    issue_date: datetime | None = None
+    due_date: datetime | None = None
+    payment_terms: str | None = None
+    purchase_order_number: str | None = None
+    updated_at: datetime | None = None
 
 
 class PaginatedCustomers(BaseModel):

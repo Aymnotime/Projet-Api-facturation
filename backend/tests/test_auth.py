@@ -10,8 +10,14 @@ from app.main import app
 from app.models import User, Organization, UserRole
 
 
-# Test database setup
-SQLALCHEMY_DATABASE_URL = "sqlite:///./test_auth.db"
+# Test database setup (file kept per-run in a temp dir; schema rebuilt from scratch)
+import os
+import tempfile
+
+TEST_DB_PATH = os.path.join(tempfile.gettempdir(), "billing_test_auth.db")
+SQLALCHEMY_DATABASE_URL = f"sqlite:///{TEST_DB_PATH}"
+if os.path.exists(TEST_DB_PATH):
+    os.remove(TEST_DB_PATH)
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

@@ -139,7 +139,7 @@ class Invoice(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
-    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"))
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"))
     number: Mapped[str] = mapped_column(String(64), index=True)
     currency: Mapped[str] = mapped_column(String(3), default="EUR")
     status: Mapped[str] = mapped_column(Enum(InvoiceStatus), default=InvoiceStatus.DRAFT)
@@ -196,7 +196,7 @@ class CreditNote(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
-    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"))
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"))
     number: Mapped[str] = mapped_column(String(64), index=True)
     currency: Mapped[str] = mapped_column(String(3), default="EUR")
     status: Mapped[str] = mapped_column(Enum(InvoiceStatus), default=InvoiceStatus.DRAFT)

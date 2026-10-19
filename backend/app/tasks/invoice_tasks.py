@@ -287,45 +287,44 @@ def validate_invoice_en16931(self: Task, invoice_id: str) -> dict[str, Any]:
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=120)
 def transmit_to_pdp(self: Task, transmission_id: str) -> dict[str, Any]:
+    """Transmet une facture à une PDP via l'adaptateur du fournisseur.
+
+    S'appuie sur ``TransmissionService`` : génération Factur-X (repli XML),
+    dépôt idempotent, persistance du statut et de la référence externe.
+    Les erreurs techniques de plateforme déclenchent un retry Celery ; le
+    rejet fonctionnel (document invalide) est définitif (pas de retry).
     """
-    Transmit invoice to PDP (Plateforme de Dématérialisation Partenaire).
-    
-    This is a placeholder for actual PDP integration (Chorus Pro, etc.).
-    In production, this would:
-    1. Generate Factur-X XML
-    2. Sign the document
-    3. Send via API to PDP provider
-    4. Handle response and update status
-    """
+    from app.models import Transmission
+    from app.services.pdp.adapter import PDPTransmissionError
+    from app.services.transmission_service import TransmissionService
+
     db = SessionLocal()
     try:
-        from app.models import Transmission
         transmission = db.query(Transmission).filter(Transmission.id == transmission_id).first()
-        
         if not transmission:
             return {"status": "error", "message": "Transmission not found"}
-        
-        # Simulate transmission (replace with actual PDP API call)
-        logger.info(f"Transmitting {transmission.pdp_provider} for transmission {transmission_id}")
-        
-        # TODO: Implement actual PDP integration
-        # - Generate Factur-X XML/UBL
-        # - Call PDP API
-        # - Handle authentication
-        # - Process response
-        
-        transmission.status = 'transmitted'
-        transmission.transmitted_at = datetime.now(timezone.utc)
-        db.commit()
-        
+
+        invoice = db.query(Invoice).filter(Invoice.id == transmission.invoice_id).first()
+        organization = db.query(Organization).filter(Organization.id == transmission.organization_id).first()
+        if not invoice or not organization:
+            return {"status": "error", "message": "Invoice or organization not found"}
+
+        service = TransmissionService(db)
+        try:
+            result_tx = service.submit_invoice(
+                organization, invoice.id, provider=transmission.pdp_provider
+            )
+        except PDPTransmissionError as exc:
+            # Erreur technique : la transmission est marquée FAILED en base, on retente.
+            raise self.retry(exc=exc, countdown=120)
+
         return {
             "status": "success",
-            "transmission_id": transmission_id,
-            "transmitted_at": datetime.now(timezone.utc).isoformat(),
-            "message": "Invoice transmitted to PDP (simulated)"
+            "transmission_id": result_tx.id,
+            "transmission_status": result_tx.status,
+            "external_reference": result_tx.external_reference,
+            "transmitted_at": result_tx.transmitted_at.isoformat() if result_tx.transmitted_at else None,
+            "message": f"Invoice transmitted to PDP '{transmission.pdp_provider}'",
         }
-    except Exception as exc:
-        logger.exception(f"Error transmitting invoice {transmission_id}")
-        raise self.retry(exc=exc, countdown=120)
     finally:
         db.close()

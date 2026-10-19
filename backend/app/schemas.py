@@ -272,3 +272,43 @@ class InvoiceContinuityCheckResponse(BaseModel):
     max_number: str | None
     year: int
     prefix: str
+
+
+# ---------------------------------------------------------------------------
+# Transmission PDP (facturation électronique)
+# ---------------------------------------------------------------------------
+
+
+class TransmissionRead(BaseModel):
+    """Représentation en lecture d'une transmission."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    organization_id: str
+    invoice_id: str | None
+    credit_note_id: str | None
+    pdp_provider: str
+    status: str
+    external_reference: str | None
+    error_message: str | None
+    attempt_count: int
+    last_attempt_at: datetime | None
+    transmitted_at: datetime | None
+    accepted_at: datetime | None
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+class TransmissionSubmitRequest(BaseModel):
+    """Demande de transmission d'une facture à une PDP."""
+
+    invoice_id: str = Field(min_length=1)
+    provider: str = Field(default="mock", min_length=1, max_length=64)
+    format: str = Field(default="factur-x", pattern="^(factur-x|xml)$")
+
+
+class PDPProvidersResponse(BaseModel):
+    """Liste des fournisseurs PDP enregistrés."""
+
+    providers: list[str]

@@ -43,7 +43,7 @@ class CustomerRead(CustomerCreate):
 
 class InvoiceCreate(BaseModel):
     customer_id: str
-    number: str = Field(min_length=1, max_length=64)
+    number: str | None = Field(default=None, max_length=64)
     total_minor: int = Field(gt=0)
     currency: str = Field(default="EUR", min_length=3, max_length=3)
     notes: str | None = None

@@ -72,7 +72,9 @@ class TestInvoiceNumberingService:
             prefix="INV"
         )
         
-        assert number == "INV-2025-0001"
+        from datetime import datetime
+        current_year = datetime.now().year
+        assert number == f"INV-{current_year}-0001"
     
     def test_generate_number_with_custom_year(self, db_session, test_organization):
         """Teste la génération avec une année personnalisée."""
@@ -86,7 +88,7 @@ class TestInvoiceNumberingService:
     
     def test_validate_number_format_valid(self):
         """Teste la validation d'un numéro valide."""
-        is_valid, error = InvoiceNumberingService.validate_number_format("FAC-2025-0001")
+        is_valid, error = InvoiceNumberingService.validate_number_format("FAC-2026-0001")
         
         assert is_valid is True
         assert error is None
@@ -135,7 +137,7 @@ class TestInvoiceNumberingService:
             invoice = Invoice(
                 organization_id=test_organization.id,
                 customer_id=customer.id,
-                number=f"FAC-2025-{i:04d}",
+                number=f"FAC-2026-{i:04d}",
                 subtotal_minor=10000,
                 tax_total_minor=2000,
                 total_minor=12000,
@@ -170,7 +172,7 @@ class TestInvoiceNumberingService:
             invoice = Invoice(
                 organization_id=test_organization.id,
                 customer_id=customer.id,
-                number=f"FAC-2025-{i:04d}",
+                number=f"FAC-2026-{i:04d}",
                 subtotal_minor=10000,
                 tax_total_minor=2000,
                 total_minor=12000,
@@ -189,7 +191,7 @@ class TestInvoiceNumberingService:
         assert result["has_gaps"] is True
         assert result["expected_count"] == 5
         assert result["actual_count"] == 4
-        assert "FAC-2025-0003" in result["gaps"]
+        assert "FAC-2026-0003" in result["gaps"]
     
     def test_reset_sequence_when_empty(self, db_session, test_organization):
         """Teste la réinitialisation de séquence quand aucune facture n'existe."""
@@ -214,7 +216,7 @@ class TestInvoiceNumberingService:
         invoice = Invoice(
             organization_id=test_organization.id,
             customer_id=customer.id,
-            number="FAC-2025-0001",
+            number="FAC-2026-0001",
             subtotal_minor=10000,
             tax_total_minor=2000,
             total_minor=12000,
@@ -316,14 +318,14 @@ class TestInvoiceNumberingAPI:
         assert response.status_code == 201
         data = response.json()
         assert "number" in data
-        assert data["number"].startswith("FAC-2025-")
+        assert data["number"].startswith("FAC-2026-")
     
     def test_validate_number_endpoint_valid(self, client, auth_headers, test_organization):
         """Teste l'endpoint de validation avec un numéro valide."""
         response = client.post(
             "/v1/invoice-numbering/validate",
             headers=auth_headers(test_organization),
-            json={"number": "FAC-2025-0001"}
+            json={"number": "FAC-2026-0001"}
         )
         
         assert response.status_code == 200
@@ -401,7 +403,7 @@ class TestInvoiceNumberingAPI:
         assert response.status_code == 201
         data = response.json()
         assert "number" in data
-        assert data["number"].startswith("FAC-2025-")
+        assert data["number"].startswith("FAC-2026-")
     
     def test_create_invoice_with_custom_number(self, client, auth_headers, test_organization):
         """Teste que la création de facture accepte un numéro personnalisé."""

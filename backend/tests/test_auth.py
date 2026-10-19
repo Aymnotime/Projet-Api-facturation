@@ -76,10 +76,15 @@ class TestRegistration:
         assert response.status_code == 409
         assert "already registered" in response.json()["detail"].lower()
     
-    def test_register_weak_password(self, client, test_user_data):
+    def test_register_weak_password(self, client):
         """Test registration with weak password fails."""
-        test_user_data["password"] = "weak"
-        response = client.post("/v1/auth/register", json=test_user_data)
+        weak_user_data = {
+            "email": "weak@example.com",
+            "password": "weak",
+            "full_name": "Weak User",
+            "organization_name": "Weak Organization"
+        }
+        response = client.post("/v1/auth/register", json=weak_user_data)
         assert response.status_code == 422  # Validation error
 
 

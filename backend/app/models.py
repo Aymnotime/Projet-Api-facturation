@@ -57,6 +57,7 @@ class Organization(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    
     api_keys: Mapped[list["ApiKey"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
     customers: Mapped[list["Customer"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
     invoices: Mapped[list["Invoice"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
@@ -68,6 +69,10 @@ class Organization(Base):
     events: Mapped[list["Event"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
     idempotency_keys: Mapped[list["IdempotencyKey"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
+    number_sequences: Mapped[list["NumberSequence"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
+    invitations: Mapped[list["Invitation"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
+
+    __table_args__ = (Index("ix_organizations_name", "name"),)
 
 
 class User(Base):
@@ -87,6 +92,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     organization: Mapped[Organization] = relationship(back_populates="users")
+    invitations: Mapped[list["Invitation"]] = relationship(back_populates="accepted_user", foreign_keys="Invitation.accepted_user_id")
 
 
 class ApiKey(Base):
@@ -152,6 +158,7 @@ class Invoice(Base):
     lines: Mapped[list["InvoiceLine"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
     transmissions: Mapped[list["Transmission"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
     events: Mapped[list["Event"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
+    payments: Mapped[list["Payment"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("organization_id", "number", name="uq_invoice_org_number"),
@@ -318,3 +325,64 @@ class IdempotencyKey(Base):
     organization: Mapped[Organization] = relationship(back_populates="idempotency_keys")
 
     __table_args__ = (Index("idx_idempotency_key_org_key", "organization_id", "key"),)
+
+
+class Invitation(Base):
+    """User invitations for multi-tenant onboarding."""
+    __tablename__ = "invitations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    email: Mapped[str] = mapped_column(String(320))
+    token: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    role: Mapped[str] = mapped_column(Enum(UserRole), default=UserRole.VIEWER)
+    status: Mapped[str] = mapped_column(String(32), default="pending")  # pending, accepted, declined, expired
+    invited_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    expires_at: Mapped[datetime]
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    accepted_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    organization: Mapped[Organization] = relationship(back_populates="invitations")
+    accepted_user: Mapped["User"] = relationship(back_populates="invitations")
+
+    __table_args__ = (Index("idx_invitations_email_org", "email", "organization_id"),)
+
+
+class NumberSequence(Base):
+    """Number sequences for invoice/credit note numbering per organization."""
+    __tablename__ = "number_sequences"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    doc_type: Mapped[str] = mapped_column(String(64))  # "invoice", "credit_note", etc.
+    prefix: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    year: Mapped[int]
+    current_value: Mapped[int] = mapped_column(Integer, default=0)
+    padding: Mapped[int] = mapped_column(Integer, default=6)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    organization: Mapped[Organization] = relationship(back_populates="number_sequences")
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "doc_type", "year", name="uq_number_sequences_org_type_year"),
+        
+    )
+
+
+class Payment(Base):
+    """Payments linked to invoices."""
+    __tablename__ = "payments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    invoice_id: Mapped[str] = mapped_column(ForeignKey("invoices.id", ondelete="CASCADE"), index=True)
+    amount_minor: Mapped[int]
+    payment_date: Mapped[datetime]
+    method: Mapped[str] = mapped_column(String(64))
+    reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    invoice: Mapped[Invoice] = relationship(back_populates="payments")

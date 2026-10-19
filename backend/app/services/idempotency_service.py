@@ -154,3 +154,63 @@ class IdempotencyService:
         db.commit()
         
         return result.rowcount
+
+    @classmethod
+    def process_request(
+        cls,
+        db: Session,
+        organization_id: str,
+        key: str,
+        method: str,
+        path: str
+    ) -> tuple[bool, Optional[dict], Optional[IdempotencyKey]]:
+        """
+        Traite une requête avec gestion d'idempotence.
+
+        Cette méthode vérifie si une réponse existe déjà pour cette clé.
+        Si oui, elle retourne la réponse cached.
+        Sinon, elle crée une nouvelle clé et retourne un indicateur pour exécuter le handler.
+
+        Args:
+            db: Session de base de données
+            organization_id: ID de l'organisation
+            key: Clé d'idempotence fournie par le client
+            method: Méthode HTTP
+            path: Chemin de la requête
+
+        Returns:
+            Tuple de (is_cached, cached_response_dict, idempotency_key)
+            - is_cached: True si une réponse cached existe
+            - cached_response_dict: Dict avec status_code et body si cached
+            - idempotency_key: L'objet IdempotencyKey (nouveau ou existant)
+        """
+        # Vérifier si la clé existe déjà
+        existing_key = cls.get_key(db, organization_id, key)
+
+        if existing_key:
+            # Vérifier si elle n'est pas expirée
+            if cls.is_expired(existing_key):
+                # Clé expirée, on la supprime et on traite comme nouvelle
+                db.delete(existing_key)
+                db.commit()
+                existing_key = None
+            elif existing_key.response_body is not None:
+                # Réponse déjà disponible, la retourner
+                try:
+                    response_body = json.loads(existing_key.response_body)
+                except json.JSONDecodeError:
+                    response_body = {"detail": existing_key.response_body}
+                
+                return True, {
+                    "status_code": existing_key.response_status,
+                    "body": response_body
+                }, existing_key
+
+        # Créer une nouvelle clé si nécessaire
+        if not existing_key:
+            new_key = cls.create_key(db, organization_id, key, method, path)
+            db.flush()  # Flush pour obtenir l'ID mais ne pas committer encore
+            return False, None, new_key
+        
+        # Clé existe mais pas encore de réponse (première requête en cours)
+        return False, None, existing_key

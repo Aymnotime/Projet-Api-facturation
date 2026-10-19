@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = Field(default=7, ge=1, le=90)
     api_key_prefix_length: int = Field(default=16, ge=4, le=64)
 
+    # --- Credentials externes (PDP, etc.) -----------------------------------
+    credentials_key: str = ""
+
     # --- CORS --------------------------------------------------------------
     cors_origins: list[str] = ["http://localhost:3000"]
 
